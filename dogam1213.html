@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>서울시립대 부동산 지도</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
+    #controls {
+      width: 250px; padding: 15px; background: #f7f7f7; border-right: 1px solid #ddd;
+    }
+    #map { flex: 1; height: 100%; }
+    #sidebar {
+      width: 350px; background: #fff; padding: 20px;
+      border-left: 1px solid #ddd; box-shadow: -2px 0 8px rgba(0,0,0,0.1);
+      overflow-y: auto; display: none; position: relative;
+    }
+    #sidebar.active { display: block; }
+    .close-btn {
+      position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer;
+    }
+    .building-title { font-weight: bold; font-size: 20px; margin-bottom: 10px; }
+    .building-info { margin-bottom: 8px; }
+    input[type="number"] {
+      width: 100%; margin-bottom: 10px; padding: 5px; font-size: 14px;
+    }
+    button {
+      width: 100%; padding: 8px; font-size: 14px;
+      background-color: #1e90ff; color: white; border: none; cursor: pointer;
+    }
+    button:hover { background-color: #006fd3; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <h3>건물 필터</h3>
+    <label>최소 평수</label>
+    <input type="number" id="filter-area" placeholder="예: 100" />
+    <label>최소 층수</label>
+    <input type="number" id="filter-floors" placeholder="예: 3" />
+    <label>최소 수용인원</label>
+    <input type="number" id="filter-capacity" placeholder="예: 200" />
+    <button onclick="applyFilters()">필터 적용</button>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="sidebar">
+    <span class="close-btn" onclick="closeSidebar()">×</span>
+    <div id="sidebar-content"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=1a1f513e0a5c001b09f0cf4f2aed29ed&autoload=false"></script>
+  <script>
+    kakao.maps.load(initMap); // 안전한 초기화
+
+    const urls = {
+      properties: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTIcwft89aSuAh0JRgo1hy3Esfu6hv5Cut9mNsz_sw5K6JYeBClN2C391FQcO_Dar0V9jUUJE5KHEdm/pub?output=csv",
+      agents: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTflIFYDuAB_bfFEF4-6yTS-tA9yssoOLwg3xlfZmn3WvntNjAErnT81_LkBKngx4KhbcxfyE6841UJ/pub?output=csv",
+      relations: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRnVQVNLeHyS_rawPig0Y3Qe7EVVnG1xIdDv7I_S0kGC4w6fmu7QahAJ1Bv3ZwWlIxt6UyXF9vvQd-s/pub?output=csv"
+    };
+
+    let map;
+    let allProperties = [], allAgents = [], relations = [];
+    let propertyMarkers = [], agentMarkers = [];
+
+    function initMap() {
+      map = new kakao.maps.Map(document.getElementById("map"), {
+        center: new kakao.maps.LatLng(37.5838, 127.0606),
+        level: 4
+      });
+
+      loadAllData();
+    }
+
+    function closeSidebar() {
+      document.getElementById("sidebar").classList.remove("active");
+    }
+
+    function showSidebar(title, html) {
+      const sidebar = document.getElementById("sidebar");
+      document.getElementById("sidebar-content").innerHTML = `<div class="building-title">${title}</div>${html}`;
+      sidebar.classList.add("active");
+    }
+
+    function clearMarkers(markers) {
+      markers.forEach(m => m.setMap(null));
+      return [];
+    }
+
+    function drawPropertyMarkers(properties) {
+      propertyMarkers = clearMarkers(propertyMarkers);
+      properties.forEach(p => {
+        if (!p.lat || !p.lng || isNaN(p.lat) || isNaN(p.lng)) return;
+        const lat = parseFloat(p.lat);
+        const lng = parseFloat(p.lng);
+        console.log("📍 매물 마커:", p.name, lat, lng);
+
+        const marker = new kakao.maps.Marker({
+          map, position: new kakao.maps.LatLng(lat, lng)
+        });
+
+        marker.addListener("click", () => {
+          const agentList = relations
+            .filter(r => r.property_id === p.id)
+            .map(r => `<li>${r.agent_name}</li>`)
+            .join("");
+          showSidebar(p.name, `
+            <div class="building-info">📏 평수: ${p.area}</div>
+            <div class="building-info">🏢 층수: ${p.floors}</div>
+            <div class="building-info">👥 수용인원: ${p.capacity}</div>
+            <div class="building-info">📍 좌표: (${p.lat}, ${p.lng})</div>
+            <div class="building-info">🤝 중개사: <ul>${agentList}</ul></div>
+          `);
+        });
+
+        propertyMarkers.push(marker);
+      });
+    }
+
+    function drawAgentMarkers() {
+      agentMarkers = clearMarkers(agentMarkers);
+      allAgents.forEach(a => {
+        if (!a.lat || !a.lng || isNaN(a.lat) || isNaN(a.lng)) return;
+        const lat = parseFloat(a.lat);
+        const lng = parseFloat(a.lng);
+        console.log("📍 중개사 마커:", a.name, lat, lng);
+
+        const marker = new kakao.maps.Marker({
+          position: new kakao.maps.LatLng(lat, lng),
+          map,
+          image: new kakao.maps.MarkerImage(
+            "http://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png",
+            new kakao.maps.Size(24, 35)
+          )
+        });
+
+        marker.addListener("click", () => {
+          const listings = relations.filter(r => r.agent_name === a.name).map(r => r.property_id);
+          const filtered = allProperties.filter(p => listings.includes(p.id));
+          const html = filtered.map(p => `<li>${p.name}</li>`).join("");
+          showSidebar(a.name, `
+            <div class="building-info">📞 전화: ${a.phone}</div>
+            <div class="building-info">📍 좌표: (${a.lat}, ${a.lng})</div>
+            <div class="building-info">🏘️ 매물:<ul>${html}</ul></div>
+          `);
+          drawPropertyMarkers(filtered);
+        });
+
+        agentMarkers.push(marker);
+      });
+    }
+
+    function applyFilters() {
+      const minArea = parseFloat(document.getElementById("filter-area").value) || 0;
+      const minFloors = parseFloat(document.getElementById("filter-floors").value) || 0;
+      const minCapacity = parseFloat(document.getElementById("filter-capacity").value) || 0;
+
+      const filtered = allProperties.filter(p =>
+        parseFloat(p.area) >= minArea &&
+        parseFloat(p.floors) >= minFloors &&
+        parseFloat(p.capacity) >= minCapacity
+      );
+      drawPropertyMarkers(filtered);
+      closeSidebar();
+    }
+
+    function loadCSV(url) {
+      return new Promise(resolve => {
+        Papa.parse(url, {
+          download: true,
+          header: true,
+          complete: results => {
+            console.log(`✅ CSV 로드 완료: ${url}`, results.data);
+            resolve(results.data);
+          }
+        });
+      });
+    }
+
+    async function loadAllData() {
+      try {
+        const [pData, aData, rData] = await Promise.all([
+          loadCSV(urls.properties),
+          loadCSV(urls.agents),
+          loadCSV(urls.relations)
+        ]);
+        allProperties = pData.filter(p => p.id && p.lat && p.lng);
+        allAgents = aData.filter(a => a.name && a.lat && a.lng);
+        relations = rData.filter(r => r.property_id && r.agent_name);
+
+        drawPropertyMarkers(allProperties);
+        drawAgentMarkers();
+      } catch (err) {
+        console.error("❌ 데이터 로딩 오류", err);
+      }
+    }
+  </script>
+</body>
+</html>
